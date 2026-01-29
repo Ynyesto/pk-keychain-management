@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# with-keychain: run a command after loading .env and resolving macOS Keychain references.
+# Generic: works with any EVM tool (Hardhat, Foundry, etc.).
+#
+# Conventions in .env:
+# - KEY=keychain:ITEM_NAME  -> export KEY with secret from Keychain item ITEM_NAME
+# - KEY=ITEM_NAME           -> if ITEM_NAME is a single-word identifier, lookup in Keychain;
+#                              if found, export KEY with the secret (else export as-is)
+# - KEY_KEYCHAIN=ITEM_NAME   -> export KEY with secret from Keychain item ITEM_NAME
+#
+# Use the variable name your tool expects: PRIVATE_KEY (Hardhat/Foundry), etc.
+# Usage:  with-keychain -- <command>   or   with-keychain -e .env -- <command>
+
+env_file=".env"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  with-keychain [-e path/to/.env] -- <command> [args...]
+
+Conventions (generic; use the var name your tool expects):
+  PRIVATE_KEY=ETH_DEV_PRIVATE_KEY     -> exports PRIVATE_KEY from Keychain (Hardhat/Foundry)
+  SOME_VAR=keychain:ITEM_NAME         -> exports SOME_VAR from Keychain item ITEM_NAME
+  SOME_VAR_KEYCHAIN=ITEM_NAME         -> exports SOME_VAR from Keychain item ITEM_NAME
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 2
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -e|--env)
+      env_file="${2:-}"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: expected '--' before command. Got: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ $# -lt 1 ]]; then
+  echo "Error: missing command after '--'." >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -f "$env_file" ]]; then
+  # Read KEY=VALUE lines (simple parser; expects no embedded newlines).
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Strip comments and whitespace.
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+
+    if [[ "$line" != *"="* ]]; then
+      continue
+    fi
+
+    key="${line%%=*}"
+    val="${line#*=}"
+
+    # trim spaces around key
+    key="$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    # trim spaces around val
+    val="$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+    # strip surrounding quotes for val
+    if [[ "$val" =~ ^\".*\"$ ]]; then
+      val="${val:1:${#val}-2}"
+    elif [[ "$val" =~ ^\'.*\'$ ]]; then
+      val="${val:1:${#val}-2}"
+    fi
+
+    # Convention: FOO_KEYCHAIN=ItemName -> export FOO from Keychain
+    if [[ "$key" == *_KEYCHAIN ]]; then
+      out_key="${key%_KEYCHAIN}"
+      secret="$(security find-generic-password -s "$val" -w 2>/dev/null || true)"
+      if [[ -z "$secret" ]]; then
+        echo "Error: Keychain item not found or empty: $val (for $key)" >&2
+        exit 1
+      fi
+      export "$out_key=$secret"
+      continue
+    fi
+
+    # Convention: FOO=keychain:ItemName -> export FOO from Keychain
+    if [[ "$val" == keychain:* ]]; then
+      item="${val#keychain:}"
+      secret="$(security find-generic-password -s "$item" -w 2>/dev/null || true)"
+      if [[ -z "$secret" ]]; then
+        echo "Error: Keychain item not found or empty: $item (for $key)" >&2
+        exit 1
+      fi
+      export "$key=$secret"
+      continue
+    fi
+
+    # Convention: FOO=ItemName (single-word identifier) -> try Keychain; if found, export FOO with secret
+    if [[ "$val" =~ ^[A-Za-z0-9_]+$ ]]; then
+      secret="$(security find-generic-password -s "$val" -w 2>/dev/null || true)"
+      if [[ -n "$secret" ]]; then
+        export "$key=$secret"
+        continue
+      fi
+    fi
+
+    # Default: export as-is
+    export "$key=$val"
+  done < "$env_file"
+fi
+
+exec "$@"
