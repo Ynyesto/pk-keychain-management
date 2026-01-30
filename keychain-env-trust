@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# keychain-env-trust: add the current (or given) directory to trusted roots so the shim resolves there.
+# By default the shim does not resolve in any directory; run this in a project dir to enable resolution there.
+#
+# Usage:
+#   keychain-env-trust              # add current directory to trusted roots
+#   keychain-env-trust /path/to/dir # add given directory
+#   keychain-env-trust --list       # list trusted roots
+#   keychain-env-trust --remove     # remove current directory from trusted roots
+
+TRUSTED_ROOTS_FILE="${KEYCHAIN_ENV_TRUSTED_ROOTS_FILE:-$HOME/.config/pk-keychain-management/trusted_roots}"
+
+_usage() {
+  cat <<'EOF'
+Usage:
+  keychain-env-trust              Add current directory to trusted roots (shim will resolve there)
+  keychain-env-trust <path>       Add given directory to trusted roots
+  keychain-env-trust --list       List trusted roots
+  keychain-env-trust --remove     Remove current directory from trusted roots
+EOF
+}
+
+_canonical_path() {
+  local path="${1:-.}"
+  (cd "$path" 2>/dev/null && pwd -P) || { echo "Error: invalid path: $path" >&2; exit 1; }
+}
+
+_add() {
+  local dir
+  dir=$(_canonical_path "${1:-.}")
+  mkdir -p "$(dirname "$TRUSTED_ROOTS_FILE")"
+  [[ -f "$TRUSTED_ROOTS_FILE" ]] || touch "$TRUSTED_ROOTS_FILE"
+  if grep -Fxq "$dir" "$TRUSTED_ROOTS_FILE" 2>/dev/null; then
+    echo "Already trusted: $dir"
+  else
+    echo "$dir" >> "$TRUSTED_ROOTS_FILE"
+    echo "Added to trusted roots: $dir"
+  fi
+}
+
+_list() {
+  if [[ ! -f "$TRUSTED_ROOTS_FILE" ]]; then
+    echo "No trusted roots (file not found: $TRUSTED_ROOTS_FILE)"
+    return 0
+  fi
+  if [[ ! -s "$TRUSTED_ROOTS_FILE" ]]; then
+    echo "No trusted roots (file is empty)"
+    return 0
+  fi
+  echo "Trusted roots:"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    echo "  $line"
+  done < "$TRUSTED_ROOTS_FILE"
+}
+
+_remove() {
+  local dir
+  dir=$(_canonical_path ".")
+  if [[ ! -f "$TRUSTED_ROOTS_FILE" ]]; then
+    echo "No trusted roots file." >&2
+    return 0
+  fi
+  if grep -Fxq "$dir" "$TRUSTED_ROOTS_FILE" 2>/dev/null; then
+    # Portable: remove line matching $dir (use temp file)
+    grep -Fxv "$dir" "$TRUSTED_ROOTS_FILE" > "${TRUSTED_ROOTS_FILE}.tmp" || true
+    mv "${TRUSTED_ROOTS_FILE}.tmp" "$TRUSTED_ROOTS_FILE"
+    echo "Removed from trusted roots: $dir"
+  else
+    echo "Not in trusted roots: $dir"
+  fi
+}
+
+case "${1:-}" in
+  --list)
+    _list
+    ;;
+  --remove)
+    _remove
+    ;;
+  --help|-h)
+    _usage
+    ;;
+  "")
+    _add "."
+    ;;
+  *)
+    _add "$1"
+    ;;
+esac

@@ -1,84 +1,81 @@
 # Private Key MacOS Keychain Management
 
-Use your Ethereum (or other EVM) private key from `.env` **without storing it in plaintext**. Works with **any** tool that reads a private key from an environment variable—Hardhat, Foundry, or anything else. No tool-specific vaults or secret managers; just one Keychain item and two scripts.
+Use your Ethereum (or other EVM) private key from `.env` **without storing it in plaintext**. Works with Hardhat, Foundry, or any tool that reads a private key from an env var. One Keychain item, two scripts. No external services required.
 
-## Goal
+- Store the key **once** in macOS Keychain.
+- In project `.env`, put only the **name** of that item (e.g. `PRIVATE_KEY=ETH_DEV_PRIVATE_KEY`).
+- Your tool sees the real key in the environment; the key never sits in a file.
 
-- Store the private key **once** in macOS Keychain (encrypted, unlocked with your Mac password).
-- In **any** project `.env`, put only the **name** of that Keychain item (e.g. `PRIVATE_KEY=ETH_DEV_PRIVATE_KEY`).
-- When you run your tool, it sees the **actual** key in the environment, as if you had pasted it in `.env`—but the key never sits in a file in plaintext.
+**Disclaimer:** This setup is for **dev keys only**—low-value, local use. Do not use it for production keys or keys holding real funds. For those, use proper tooling (e.g. Foundry’s encrypted keystore, Hardhat’s wallet/keystore options) and/or cold wallets, not env-based key loading.
 
-You keep the usual “set a var in `.env`, run the tool” workflow, without putting the key in plaintext and without adopting each framework’s own secret solution.
-
-## Why this is convenient
-
-- **Same `.env` pattern everywhere**: Use whatever variable name the tool expects (`PRIVATE_KEY`, `PKEY`, `SECRET_KEY`, etc.) with the value set to the Keychain item name. One convention across all EVM projects.
-- **No plaintext key in repos**: `.env` only contains a placeholder name; the real key lives in Keychain. Safe to commit a `.env.example` with that placeholder.
-- **No paid services**: Uses macOS Keychain only; no 1Password or other subscriptions.
-- **Framework-agnostic**: One setup for Hardhat, Foundry, and any other tool that reads a private key from an env var.
-
-## Scripts
-
-| Script | Purpose |
-|--------|--------|
-| **keychain-env-shim.sh** | A *shim*: a small adapter that runs on every `cd` (in zsh). It looks for a `.env` in the current (or parent) directory, finds lines whose value is a Keychain item name, fetches the secret from Keychain, and exports the same variable name with that secret. When you `cd` into a project, the right env vars are set automatically; when you leave, they’re unset. |
-| **with-keychain** | Wrapper for one-off runs: `with-keychain -- <command>`. Reads `.env`, resolves Keychain refs into env vars, then runs your command. Use when the shim isn’t active (e.g. IDE terminal that didn’t load `~/.zshrc`, non-zsh shell, or CI), or when you want to run a command without `cd`-ing into the project first. |
+---
 
 ## Install
 
-1. **Put the scripts on your PATH** (e.g. `~/.local/bin`). From this repo:
+1. **Scripts on PATH** (e.g. `~/.local/bin`):
 
    ```bash
    cd /path/to/pk-keychain-management
-   mkdir -p ~/.local/bin
-   cp keychain-env-shim.sh with-keychain ~/.local/bin/
-   chmod +x ~/.local/bin/with-keychain
+   cp keychain-env-shim.sh keychain-env-trust with-keychain ~/.local/bin/
+   chmod +x ~/.local/bin/keychain-env-trust ~/.local/bin/with-keychain
    ```
 
-   Or symlink so updates in this repo are used automatically:
+   The shim is **sourced** from `~/.zshrc`, not executed; only `keychain-env-trust` and `with-keychain` need to be executable. Ensure `~/.local/bin` is in your `PATH` (e.g. in `~/.zshrc`: `export PATH="$HOME/.local/bin:$PATH"`).
+
+2. **Store your key in Keychain once.** Item name must contain `PRIVATE_KEY` or `PKEY` (e.g. `ETH_DEV_PRIVATE_KEY`) to avoid exposing other unrelated Keychain secrets:
 
    ```bash
-   cd /path/to/pk-keychain-management
-   ln -sf "$(pwd)/keychain-env-shim.sh" ~/.local/bin/keychain-env-shim.sh
-   ln -sf "$(pwd)/with-keychain" ~/.local/bin/with-keychain
-   chmod +x ~/.local/bin/with-keychain
+   security add-generic-password -U -s "ETH_DEV_PRIVATE_KEY" -a "you" -w "0xYOUR_PRIVATE_KEY"
    ```
 
-   Ensure `~/.local/bin` is in your `PATH` (e.g. in `~/.zshrc`: `export PATH="$HOME/.local/bin:$PATH"`).
+   Lookup uses the **service name** (`-s`) only—keep it unique. The account (`-a`) is for display in Keychain Access only. When macOS prompts, prefer **Allow** or **Allow Once**. Avoid **Always Allow**—it can significantly reduce friction for any process running as you to read the item.
 
-2. **Store your key in Keychain once** (use a name you’ll reuse in every project):
-
-   ```bash
-   security add-generic-password -U -s "ETH_DEV_PRIVATE_KEY" -a "your-account-name" -w "0xYOUR_PRIVATE_KEY"
-   ```
-
-   Replace `your-account-name` and `0xYOUR_PRIVATE_KEY` with your choice and your actual key (with or without `0x`).
-
-3. **Use the shim (optional but recommended)** so keys are resolved automatically when you `cd` into a project:
-
-   In `~/.zshrc` add:
+3. **Optional — auto-resolve on `cd` (zsh):** In `~/.zshrc` add:
 
    ```bash
    source "$HOME/.local/bin/keychain-env-shim.sh"
    ```
 
-   Reload the shell (`exec zsh` or open a new terminal). When you `cd` into a directory that has a `.env` with e.g. `PRIVATE_KEY=ETH_DEV_PRIVATE_KEY`, that variable will be set to the real key from Keychain.
+   In a directory you trust, run once: `keychain-env-trust` — that adds the **current directory** as a trusted root (the shim will resolve in that directory and its subdirectories). Then run `cd .` or open a new terminal and `cd` to the project so the shim picks it up.
 
-## Usage in a project
+---
 
-In the project’s `.env`, use the variable name your **tool** expects, and set the value to the Keychain item name:
+## Usage
 
-- **Hardhat / Foundry** (and most tools): `PRIVATE_KEY=ETH_DEV_PRIVATE_KEY`
-- Or any other name: `PKEY=ETH_DEV_PRIVATE_KEY`, `SECRET_KEY=ETH_DEV_PRIVATE_KEY`, `ETH_SEPOLIA_KEY=ETH_DEV_PRIVATE_KEY`, etc.
+**In the project `.env`:** use the variable name your tool expects, value = Keychain item name:
 
-You can also use the explicit form: `SOME_VAR=keychain:ETH_DEV_PRIVATE_KEY`.
+```bash
+PRIVATE_KEY=ETH_DEV_PRIVATE_KEY
+```
 
-Then:
+**Run your tool:**
 
-- **With the shim**: `cd` to the project and run your tool (e.g. `npx hardhat run ...`, `forge script ...`). The key is already in the environment.
-- **Without the shim**: Run `with-keychain -- npx hardhat run ...` (or `with-keychain -- forge script ...`, etc.).
+- **With the shim:** After `keychain-env-trust` and `cd` into the project, run e.g. `npx hardhat run ...` or `forge script ...` — the key is already in the environment.
+- **Without the shim:** `with-keychain -- npx hardhat run ...` or `with-keychain -- forge script ...`
+
+---
+
+## Scripts
+
+| Script | Purpose |
+|--------|--------|
+| **keychain-env-shim.sh** | Zsh hook: on every `cd`, in trusted dirs only, loads `$PWD/.env` and resolves Keychain refs into env vars; restores/unsets when you leave. |
+| **keychain-env-trust** | Add/remove/list trusted roots (`keychain-env-trust`, `--list`, `--remove`). Roots in `~/.config/pk-keychain-management/trusted_roots`. |
+| **with-keychain** | One-off: `with-keychain -- <command>` — loads `.env`, resolves refs, runs command. Use when shim isn’t active or for untrusted repos. |
+
+---
 
 ## Requirements
 
 - macOS (uses `security` and Keychain).
-- zsh (for the shim; `with-keychain` is plain bash and works in any shell).
+- zsh for the shim; `with-keychain` is bash and works in any shell.
+- **Not for CI or production keys** — dev / local use only.
+
+---
+
+## Reference
+
+- **Allowlist:** Only item names containing `PRIVATE_KEY` or `PKEY` (case-insensitive) are resolved. Other Keychain items are never touched.
+- **Trusted roots:** By default the shim resolves in **no** directory. Run `keychain-env-trust` in a project to add it. After adding, run `cd .` or open a new terminal so the shim picks it up.
+- **Security:** The key ends up in env vars—any script in that shell can read it. Use a **dev-only key** with low funds. Prefer `with-keychain` for untrusted repos; avoid running `npm install` or arbitrary scripts in a shell where the shim has already exported keys.
+- **Parser:** Inline `#` comments in `.env` values are stripped. Only valid env variable names are exported.
